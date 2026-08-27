@@ -1,0 +1,306 @@
+{
+  "name": "Lesson 8 - Multi-API Orchestration",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "7a59fcca-5b86-42da-8134-a803f13aab6f",
+      "name": "Start (Manual Trigger)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "customerEmail",
+              "value": "jane.doe@example.com",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "subject",
+              "value": "Unable to reset my password",
+              "type": "string"
+            },
+            {
+              "id": "a3",
+              "name": "description",
+              "value": "Customer reports the reset link is expired.",
+              "type": "string"
+            },
+            {
+              "id": "a4",
+              "name": "priority",
+              "value": "high",
+              "type": "string"
+            },
+            {
+              "id": "a5",
+              "name": "channel",
+              "value": "email",
+              "type": "string"
+            },
+            {
+              "id": "a6",
+              "name": "createdAt",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "43d63320-e433-45f6-aa0f-fa4ea48bc952",
+      "name": "Initialize Ticket Payload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "t1",
+              "name": "transactionId",
+              "value": "=TXN-{{ $now.toFormat(\"yyyyLLdd\") }}-{{ $execution.id }}-{{ Math.floor(Math.random() * 1000000) }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "513b00e8-18dd-4518-9c6a-1dc765d726dc",
+      "name": "Generate Transaction ID",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Mock customer directory: map email -> customer ID\nconst directory = {\n  'jane.doe@example.com': 'CUST-1001',\n  'john.smith@example.com': 'CUST-1002',\n  'acme.support@example.com': 'CUST-2001',\n};\n\nconst email = String($json.customerEmail || '').trim().toLowerCase();\nconst customerId = directory[email] || 'CUST-UNKNOWN';\n\nreturn {\n  json: {\n    ...$json,\n    customerId,\n    customerFound: customerId !== 'CUST-UNKNOWN',\n  },\n};"
+      },
+      "id": "9c96b740-1b4f-4ca6-98c0-3e16e6dd8ebc",
+      "name": "Customer Lookup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://httpbin.org/post",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ transactionId: $json.transactionId, customerId: $json.customerId, customerEmail: $json.customerEmail, subject: $json.subject, description: $json.description, priority: $json.priority, channel: $json.channel, createdAt: $json.createdAt }) }}",
+        "options": {}
+      },
+      "id": "218fb873-dbcd-4a73-9ca7-7ba7c7cad9ea",
+      "name": "Log Ticket to Mock DB API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        896,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "v1",
+              "name": "dbStored",
+              "value": "={{ $json.url ? true : false }}",
+              "type": "boolean"
+            },
+            {
+              "id": "v2",
+              "name": "storedTransactionId",
+              "value": "={{ $('Generate Transaction ID').item.json.transactionId }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fc9c0f87-1a93-433e-a64f-28195fe6bf41",
+      "name": "Verify DB Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://httpbin.org/post",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message: \"Support ticket created\", transactionId: $('Generate Transaction ID').item.json.transactionId, customerId: $('Customer Lookup').item.json.customerId, to: $('Initialize Ticket Payload').item.json.customerEmail, subject: $('Initialize Ticket Payload').item.json.subject, priority: $('Initialize Ticket Payload').item.json.priority, dbStored: $json.dbStored }) }}",
+        "options": {}
+      },
+      "id": "b09e960e-1135-44d2-b46f-86ab929f750f",
+      "name": "Send Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1344,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const init = $(\"Initialize Ticket Payload\").first().json;\nconst txn = $(\"Generate Transaction ID\").first().json;\nconst lookup = $(\"Customer Lookup\").first().json;\nconst verify = $(\"Verify DB Response\").first().json;\nconst notify = $input.first().json;\n\nconst checks = {\n  ticketInitialized: Boolean(init.customerEmail && init.subject),\n  transactionIdGenerated: Boolean(txn.transactionId),\n  customerLookupResolved: Boolean(lookup.customerId),\n  databaseLogged: Boolean(verify.dbStored),\n  notificationSent: Boolean(notify && notify.url),\n};\n\nconst passed = Object.values(checks).every(Boolean);\n\nreturn [{\n  json: {\n    status: passed ? \"SUCCESS\" : \"FAILED\",\n    checks,\n    summary: {\n      transactionId: txn.transactionId,\n      customerId: lookup.customerId,\n      customerEmail: init.customerEmail,\n      priority: init.priority,\n    },\n  },\n}];"
+      },
+      "id": "ef993b10-cab4-479f-bc94-c4b9c1ae5baa",
+      "name": "Validate Execution Flow",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Start (Manual Trigger)": {
+      "main": [
+        [
+          {
+            "node": "Initialize Ticket Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Ticket Payload": {
+      "main": [
+        [
+          {
+            "node": "Generate Transaction ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Transaction ID": {
+      "main": [
+        [
+          {
+            "node": "Customer Lookup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Customer Lookup": {
+      "main": [
+        [
+          {
+            "node": "Log Ticket to Mock DB API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Ticket to Mock DB API": {
+      "main": [
+        [
+          {
+            "node": "Verify DB Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify DB Response": {
+      "main": [
+        [
+          {
+            "node": "Send Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Notification": {
+      "main": [
+        [
+          {
+            "node": "Validate Execution Flow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "bf26facf-1402-40ea-bdf4-7ac8d522236d",
+  "meta": {
+    "instanceId": "201381d913fa9e78389f7093cb99cedc70c766251a500f897db19feccfda3bd0"
+  },
+  "nodeGroups": [
+    {
+      "id": "988a5a6f-362c-4af5-a441-3c3d3e49eab0",
+      "name": "Initialize",
+      "nodeIds": [
+        "43d63320-e433-45f6-aa0f-fa4ea48bc952",
+        "513b00e8-18dd-4518-9c6a-1dc765d726dc"
+      ],
+      "description": "Create the support ticket payload and generate a unique transaction ID."
+    },
+    {
+      "id": "f16a2e48-5008-4ab4-aee2-828190dbb845",
+      "name": "Lookup & Log",
+      "nodeIds": [
+        "9c96b740-1b4f-4ca6-98c0-3e16e6dd8ebc",
+        "218fb873-dbcd-4a73-9ca7-7ba7c7cad9ea",
+        "fc9c0f87-1a93-433e-a64f-28195fe6bf41"
+      ],
+      "description": "Resolve customer ID from email and log the ticket to the mock database API."
+    },
+    {
+      "id": "f66bc32b-9c94-4dad-9ae2-abeca6290078",
+      "name": "Notify & Validate",
+      "nodeIds": [
+        "b09e960e-1135-44d2-b46f-86ab929f750f",
+        "ef993b10-cab4-479f-bc94-c4b9c1ae5baa"
+      ],
+      "description": "Send a confirmation notification using ancestor variables and validate the full flow."
+    }
+  ],
+  "id": "moTEBjo8OSysnRWS",
+  "tags": []
+}
